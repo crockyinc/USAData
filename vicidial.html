@@ -297,10 +297,13 @@
 <div class="watermark">Created by Nimo</div>
 
 <script>
+// Splits a pasted block into single values. Commas, semicolons, pipes, slashes
+// and whitespace all act as separators, and stray quotes are trimmed, so lists
+// copied out of chat, Markdown, Excel or a spreadsheet column stay clean.
 function parse(v) {
     return v
-        .split(/[\n, ]+/)
-        .map(x => x.trim())
+        .split(/[\s,;|\/]+/)
+        .map(x => x.replace(/^["'`]+|["'`]+$/g, "").trim())
         .filter(x => x);
 }
 
@@ -331,12 +334,26 @@ function normalizeZip(value) {
     // Excel style values such as 3043.0
     if (/^\d+\.0+$/.test(z)) z = z.split(".")[0];
 
-    // Keep the ZIP portion only (drops ZIP+4 extensions and stray characters)
+    // Keep the ZIP portion only (drops ZIP+4 extensions and stray characters).
+    // Tokens with no ZIP digits at all ("/", "-", "n/a") are discarded.
     const match = z.match(/\d{3,}/);
-    if (match) z = match[0];
+    if (!match) return "";
+
+    z = match[0];
 
     // Ignore the initial zero: 03043 -> 3043, 04008 -> 4008
     return z.replace(/^0+(?=\d)/, "");
+}
+
+// ViciDial stores states as 2-letter uppercase codes, so "ca" -> "CA".
+function normalizeState(value) {
+    const s = value.trim().replace(/[^A-Za-z]/g, "");
+    return /^[A-Za-z]{2}$/.test(s) ? s.toUpperCase() : s;
+}
+
+// phone_number holds digits only, so "(305) 555-" -> "305555".
+function normalizePhone(value) {
+    return value.trim().replace(/\D/g, "");
 }
 
 function gen() {
@@ -351,18 +368,35 @@ function gen() {
         return;
     }
 
-    // ZIP codes are zero stripped for postal filters; every other type keeps the raw value.
-    // Duplicate removal runs after normalising, so 00501, 501 and 0501 (all stored as 501)
-    // collapse into a single entry. States and statuses are matched case-insensitively.
-    const val = type === 'postal_in'
-        ? dedupe(raw.map(normalizeZip).filter(Boolean))
-        : dedupe(raw, type !== 'phone_like');
+    // Every type is normalised first, then de-duplicated. Normalising first is
+    // what makes 00501, 0501, 501.0 and 501 collapse into a single '501' entry.
+    // States and statuses are matched case-insensitively (SQL default collation).
+    let cleaned;
 
-    const removed = raw.length - val.length;
-    document.getElementById("status").textContent = removed > 0
-        ? `${val.length} unique value${val.length === 1 ? "" : "s"} · ${removed} duplicate${removed === 1 ? "" : "s"} removed`
-        : `${val.length} unique value${val.length === 1 ? "" : "s"}`;
+    if (type === 'postal_in') cleaned = raw.map(normalizeZip);
+    else if (type === 'state_in') cleaned = raw.map(normalizeState);
+    else if (type === 'phone_like') cleaned = raw.map(normalizePhone);
+    else cleaned = raw;
 
+    const valid = cleaned.filter(Boolean);
+    const val = dedupe(valid, type !== 'phone_like');
+
+    const duplicates = valid.length - val.length;
+    const ignored = raw.length - valid.length;
+
+    if (val.length === 0) {
+        outputBox.innerText = "⚠ No usable values found: check that the entries match the selected filter type.";
+        outputBox.style.color = "var(--danger-color)";
+        document.getElementById("status").textContent = `${ignored} value${ignored === 1 ? "" : "s"} ignored`;
+        return;
+    }
+
+    const notes = [`${val.length} unique value${val.length === 1 ? "" : "s"}`];
+
+    if (duplicates > 0) notes.push(`${duplicates} duplicate${duplicates === 1 ? "" : "s"} removed`);
+    if (ignored > 0) notes.push(`${ignored} invalid ignored`);
+
+    document.getElementById("status").textContent = notes.join(" · ");
     outputBox.style.color = "var(--accent-blue)"; 
 
     // Strict formatting: Items joined directly as '12345','67890' with no space
