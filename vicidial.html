@@ -304,6 +304,25 @@ function parse(v) {
         .filter(x => x);
 }
 
+// Drops repeated entries while keeping the order of first appearance.
+// With ignoreCase, "CA", "ca" and "Ca" collapse into the first value seen,
+// since SQL IN () comparisons are case-insensitive under the default collation.
+function dedupe(values, ignoreCase = false) {
+    const seen = new Set();
+    const unique = [];
+
+    for (const value of values) {
+        const key = ignoreCase ? value.toLowerCase() : value;
+
+        if (seen.has(key)) continue;
+
+        seen.add(key);
+        unique.push(value);
+    }
+
+    return unique;
+}
+
 // ViciDial / zipdata.json store ZIP codes without their leading zero:
 // 03043 is stored as 3043 and 04008 as 4008.
 function normalizeZip(value) {
@@ -328,11 +347,22 @@ function gen() {
     if (raw.length === 0) {
         outputBox.innerText = "⚠ System syntax prompt error: Please fill in target strings.";
         outputBox.style.color = "var(--danger-color)";
+        document.getElementById("status").textContent = "SQL Clause Query Engine";
         return;
     }
 
-    // ZIP codes are zero stripped for postal filters; every other type keeps the raw value
-    const val = type === 'postal_in' ? raw.map(normalizeZip) : raw;
+    // ZIP codes are zero stripped for postal filters; every other type keeps the raw value.
+    // Duplicate removal runs after normalising, so 00501, 501 and 0501 (all stored as 501)
+    // collapse into a single entry. States and statuses are matched case-insensitively.
+    const val = type === 'postal_in'
+        ? dedupe(raw.map(normalizeZip).filter(Boolean))
+        : dedupe(raw, type !== 'phone_like');
+
+    const removed = raw.length - val.length;
+    document.getElementById("status").textContent = removed > 0
+        ? `${val.length} unique value${val.length === 1 ? "" : "s"} · ${removed} duplicate${removed === 1 ? "" : "s"} removed`
+        : `${val.length} unique value${val.length === 1 ? "" : "s"}`;
+
     outputBox.style.color = "var(--accent-blue)"; 
 
     // Strict formatting: Items joined directly as '12345','67890' with no space
